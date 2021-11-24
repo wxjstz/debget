@@ -1,0 +1,84 @@
+#! /bin/sh
+
+[ ! -f $HOME/.apt/rc ] && {
+	mkdir -p $HOME/.apt/
+	cat << EOF >$HOME/.apt/rc
+add2PATH() {
+	while [ \$# -gt 0 ]; do
+		case :\$PATH: in
+		*:\$1:*)
+			;;
+		*)
+			export PATH=\$1:\$PATH
+			;;
+		esac
+		shift
+	done
+}
+add2PATH \$HOME/.apt/usr/local/sbin
+add2PATH \$HOME/.apt/usr/local/bin
+add2PATH \$HOME/.apt/usr/sbin
+add2PATH \$HOME/.apt/usr/bin
+add2PATH \$HOME/.apt/sbin
+add2PATH \$HOME/.apt/bin
+EOF
+	[ -f $HOME/.bashrc ] && {
+		echo "source \$HOME/.apt/rc" >> $HOME/.bashrc
+	}
+	[ -f $HOME/.zshrc  ] && {
+		echo "source \$HOME/.apt/rc" >> $HOME/.zshrc
+	}
+	echo "\033[31mPlease use \"source ~/.apt/rc\" command to update environment variables\033[0m"
+
+	BIN_PATH=$(readlink -f $0)
+	[ "$HOME/.apt/bin" != "$(dirname $BIN_PATH)" ] && {
+		mkdir -p $HOME/.apt/bin
+		mv $BIN_PATH $HOME/.apt/bin
+	}
+}
+
+[ $# -eq 0 ] && exit 1
+
+CACHE_DIR=$(mktemp -d)
+APT_CACHE_DIR=$CACHE_DIR/cache
+APT_STATE_DIR=$CACHE_DIR/state
+APT_SOURCES=$CACHE_DIR/sources.list
+
+APT_OPTIONS=""
+APT_OPTIONS="$APT_OPTIONS -o debug::nolocking=true"
+APT_OPTIONS="$APT_OPTIONS -o dir::cache=$APT_CACHE_DIR"
+APT_OPTIONS="$APT_OPTIONS -o dir::state=$APT_STATE_DIR"
+APT_OPTIONS="$APT_OPTIONS -o dir::etc::sourcelist=$APT_SOURCES"
+
+mkdir -p $APT_CACHE_DIR
+mkdir -p $APT_STATE_DIR
+
+cat /etc/apt/sources.list >$APT_SOURCES
+[ -f /etc/apt/sources.list.d/*.list ] && \
+	cat /etc/apt/sources.list.d/*.list >>$APT_SOURCES
+
+apt-get $APT_OPTIONS update || {
+	rm -rf $CACHE_DIR
+	exit 2
+}
+
+for PACKAGE in $*; do
+	apt-get $APT_OPTIONS reinstall --download-only $PACKAGE || {
+		rm -rf $CACHE_DIR
+		exit 3
+	}
+done
+
+echo >> $HOME/.apt/log.txt
+echo debget $* >> $HOME/.apt/log.txt
+echo ---------------->> $HOME/.apt/log.txt
+for deb in $(ls $APT_CACHE_DIR/archives/*.deb); do
+	dpkg -x $deb $HOME/.apt || {
+		echo ! ! ! failed to extract $(basename $deb) ! ! ! | tee -a $HOME/.apt/log.txt
+		rm -rf $CACHE_DIR
+		exit 4
+	}
+	echo extract: $(basename $deb) | tee -a $HOME/.apt/log.txt
+done
+
+rm -rf $CACHE_DIR
